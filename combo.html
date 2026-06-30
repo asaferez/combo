@@ -350,6 +350,28 @@
     display: flex; align-items: center; gap: 6px;
     padding: 6px 8px; border-bottom: 1px solid var(--surface2);
   }
+
+  /* ── Preview modal ── */
+  .preview-backdrop.open { display: flex; }
+  .preview-box {
+    background: var(--bg); border-radius: 10px; width: min(95vw, 1120px);
+    max-height: 93vh; display: flex; flex-direction: column;
+    box-shadow: var(--shadow-md); overflow: hidden;
+  }
+  .preview-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 18px; border-bottom: 1px solid var(--surface2); flex-shrink: 0;
+  }
+  .preview-title { font-size: 15px; font-weight: 600; color: var(--text); }
+  .preview-actions { display: flex; gap: 8px; }
+  .preview-canvas-wrap {
+    padding: 16px; display: flex; align-items: center; justify-content: center;
+    background: var(--surface); overflow: auto;
+  }
+  #previewCanvas {
+    max-width: 100%; height: auto; border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.12); background: #fff;
+  }
 </style>
 </head>
 <body>
@@ -371,7 +393,8 @@
   <div class="header-actions">
     <button class="btn btn-ghost" id="btnNew">חדש</button>
     <button class="btn btn-ghost" id="btnImport">ייבוא</button>
-    <button class="btn btn-primary" id="btnExport">ייצוא</button>
+    <button class="btn btn-primary" id="btnPreview">תצוגה מקדימה</button>
+    <button class="btn btn-ghost" id="btnExport">ייצוא</button>
   </div>
 </header>
 
@@ -402,6 +425,21 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" id="wallCancel">ביטול</button>
       <button class="btn btn-primary" id="wallConfirm">אישור</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop preview-backdrop" id="previewModal">
+  <div class="preview-box">
+    <div class="preview-head">
+      <span class="preview-title">תצוגה מקדימה</span>
+      <div class="preview-actions">
+        <button class="btn btn-ghost" id="previewSave">שמירת תמונה</button>
+        <button class="btn btn-primary" id="previewClose">סגירה</button>
+      </div>
+    </div>
+    <div class="preview-canvas-wrap">
+      <canvas id="previewCanvas"></canvas>
     </div>
   </div>
 </div>
@@ -1299,6 +1337,222 @@ function renderWallPanel() {
   edit.addEventListener('click', () => openWallModal());
   panel.appendChild(edit);
 }
+
+// ── 3D Preview (isometric, single-file, canvas) ────────────────────────
+const ISO_COS = Math.cos(Math.PI / 6), ISO_SIN = Math.sin(Math.PI / 6);
+function isoProject(x, y, z) { return { x: (x - y) * ISO_COS, y: (x + y) * ISO_SIN - z }; }
+function totalRunWidth(body) { return body.columns.reduce((s, c) => s + (Number(c.width) || 0), 0); }
+let previewRoomImg = null; // swapped for the customer's room image when provided
+
+// Lay all columns out as connected runs that turn 90° at each body join.
+function buildScene() {
+  const boxes = [];
+  let cursor = { x: 0, y: 0 };     // back-start corner of the current run
+  let dir = { x: 1, y: 0 };        // run direction
+  let inward = { x: 0, y: 1 };     // depth / front direction
+  state.bodies.forEach((body, bi) => {
+    let off = 0;
+    body.columns.forEach(col => {
+      boxes.push({
+        base: { x: cursor.x + dir.x * off, y: cursor.y + dir.y * off },
+        dir: { ...dir }, inward: { ...inward },
+        w: Number(col.width) || 0, d: colDepth(col), h: Number(col.totalHeight) || 0, col, bi
+      });
+      off += Number(col.width) || 0;
+    });
+    // Turn for next body: swap dir/inward (keeps both fronts camera-facing),
+    // and offset the next run by this body's depth so they meet at the corner.
+    const dpt = bodyDepth(body), runLen = totalRunWidth(body);
+    const runEnd = { x: cursor.x + dir.x * runLen, y: cursor.y + dir.y * runLen };
+    const ndir = { ...inward }, ninward = { ...dir };
+    cursor = { x: runEnd.x + ndir.x * dpt, y: runEnd.y + ndir.y * dpt };
+    dir = ndir; inward = ninward;
+  });
+  return boxes;
+}
+
+function poly(ctx, pts) {
+  ctx.beginPath();
+  pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+  ctx.closePath();
+}
+function frontPt(b, t, z, P) {
+  return P(b.base.x + b.inward.x * b.d + b.dir.x * b.w * t,
+           b.base.y + b.inward.y * b.d + b.dir.y * b.w * t, z);
+}
+
+function drawSectionBand(ctx, b, P, zLo, zHi, sec) {
+  const colors = { open: '#ffffff', shelf: '#f0f0ec', hanging: '#eef3f8', drawer: '#faf5ee' };
+  const p1 = frontPt(b, 0, zLo, P), p2 = frontPt(b, 1, zLo, P), p3 = frontPt(b, 1, zHi, P), p4 = frontPt(b, 0, zHi, P);
+  ctx.fillStyle = colors[sec.type] || '#fff';
+  poly(ctx, [p1, p2, p3, p4]); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.10)'; ctx.lineWidth = 1; ctx.stroke();
+  const line = (z, c, lw) => {
+    const a = frontPt(b, 0.04, z, P), d = frontPt(b, 0.96, z, P);
+    ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(d.x, d.y); ctx.stroke();
+  };
+  if (sec.type === 'shelf') {
+    const n = Math.max(1, sec.shelfCount || 3);
+    for (let i = 1; i <= n; i++) line(zLo + (zHi - zLo) * (i / (n + 1)), 'rgba(0,0,0,0.20)', 1.3);
+  } else if (sec.type === 'drawer') {
+    const n = Math.max(1, sec.drawerCount || 2);
+    for (let i = 1; i < n; i++) line(zLo + (zHi - zLo) * (i / n), 'rgba(120,100,70,0.55)', 1.3);
+    ctx.fillStyle = 'rgba(120,100,70,0.6)';
+    for (let i = 0; i < n; i++) {
+      const m = frontPt(b, 0.5, zLo + (zHi - zLo) * ((i + 0.5) / n), P);
+      ctx.beginPath(); ctx.arc(m.x, m.y, 1.8, 0, Math.PI * 2); ctx.fill();
+    }
+    if (sec.glassFront) { ctx.fillStyle = 'rgba(150,190,225,0.30)'; poly(ctx, [p1, p2, p3, p4]); ctx.fill(); }
+  } else if (sec.type === 'hanging') {
+    line(zHi - (zHi - zLo) * 0.16, 'rgba(90,130,165,0.85)', 1.8);
+  }
+}
+
+function drawBox(ctx, b, P) {
+  const s = b.base, ex = { x: b.dir.x * b.w, y: b.dir.y * b.w }, ey = { x: b.inward.x * b.d, y: b.inward.y * b.d }, h = b.h;
+  const Wbs = s, Wbe = { x: s.x + ex.x, y: s.y + ex.y };
+  const Wfe = { x: s.x + ex.x + ey.x, y: s.y + ex.y + ey.y }, Wfs = { x: s.x + ey.x, y: s.y + ey.y };
+  const bs0 = P(Wbs.x, Wbs.y, 0), be0 = P(Wbe.x, Wbe.y, 0), fe0 = P(Wfe.x, Wfe.y, 0), fs0 = P(Wfs.x, Wfs.y, 0);
+  const bsh = P(Wbs.x, Wbs.y, h), beh = P(Wbe.x, Wbe.y, h), feh = P(Wfe.x, Wfe.y, h), fsh = P(Wfs.x, Wfs.y, h);
+
+  ctx.fillStyle = 'rgba(0,0,0,0.08)'; poly(ctx, [bs0, be0, fe0, fs0]); ctx.fill();      // floor shadow
+  ctx.lineWidth = 1; ctx.strokeStyle = '#aeb5bd';
+  ctx.fillStyle = '#e6e9ed'; poly(ctx, [bsh, beh, feh, fsh]); ctx.fill(); ctx.stroke(); // top
+  ctx.fillStyle = '#d2d7dd'; poly(ctx, [be0, fe0, feh, beh]); ctx.fill(); ctx.stroke(); // run-end side
+  ctx.fillStyle = '#fbfcfd'; poly(ctx, [fs0, fe0, feh, fsh]); ctx.fill(); ctx.stroke(); // front base
+
+  let zHi = h;
+  (b.col.sections || []).forEach(sec => {
+    const zLo = Math.max(0, zHi - (Number(sec.height) || 0));
+    drawSectionBand(ctx, b, P, zLo, zHi, sec);
+    zHi = zLo;
+  });
+  ctx.strokeStyle = '#8d949c'; ctx.lineWidth = 1.2; poly(ctx, [fs0, fe0, feh, fsh]); ctx.stroke();
+}
+
+function drawWoman(ctx, foot, H) {
+  const cx = foot.x, cy = foot.y;
+  ctx.save();
+  ctx.fillStyle = 'rgba(52,57,68,0.88)';
+  ctx.strokeStyle = 'rgba(52,57,68,0.88)';
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(cx, cy - 0.90 * H, 0.052 * H, 0, Math.PI * 2); ctx.fill();      // head
+  ctx.lineWidth = 0.03 * H; ctx.beginPath(); ctx.moveTo(cx, cy - 0.855 * H); ctx.lineTo(cx, cy - 0.82 * H); ctx.stroke(); // neck
+  poly(ctx, [                                                                               // A-line dress
+    { x: cx - 0.075 * H, y: cy - 0.82 * H }, { x: cx + 0.075 * H, y: cy - 0.82 * H },
+    { x: cx + 0.16 * H, y: cy - 0.40 * H }, { x: cx - 0.16 * H, y: cy - 0.40 * H }
+  ]); ctx.fill();
+  ctx.lineWidth = 0.028 * H;
+  ctx.beginPath(); ctx.moveTo(cx - 0.07 * H, cy - 0.80 * H); ctx.lineTo(cx - 0.145 * H, cy - 0.52 * H); ctx.stroke(); // arms
+  ctx.beginPath(); ctx.moveTo(cx + 0.07 * H, cy - 0.80 * H); ctx.lineTo(cx + 0.145 * H, cy - 0.52 * H); ctx.stroke();
+  ctx.lineWidth = 0.036 * H;
+  ctx.beginPath(); ctx.moveTo(cx - 0.05 * H, cy - 0.40 * H); ctx.lineTo(cx - 0.05 * H, cy); ctx.stroke();             // legs
+  ctx.beginPath(); ctx.moveTo(cx + 0.05 * H, cy - 0.40 * H); ctx.lineTo(cx + 0.05 * H, cy); ctx.stroke();
+  ctx.restore();
+}
+
+function drawRoom(ctx, CW, CH) {
+  if (previewRoomImg) {
+    // cover-fit the customer's room image
+    const ir = previewRoomImg.width / previewRoomImg.height, cr = CW / CH;
+    let dw = CW, dh = CH, dx = 0, dy = 0;
+    if (ir > cr) { dh = CH; dw = CH * ir; dx = (CW - dw) / 2; } else { dw = CW; dh = CW / ir; dy = (CH - dh) / 2; }
+    ctx.drawImage(previewRoomImg, dx, dy, dw, dh);
+    return;
+  }
+  const g = ctx.createLinearGradient(0, 0, 0, CH);
+  g.addColorStop(0, '#eef1f4'); g.addColorStop(1, '#e4e8ec');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, CW, CH);
+  ctx.fillStyle = '#d9dde2'; ctx.fillRect(0, CH * 0.64, CW, CH * 0.36);
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)'; ctx.beginPath(); ctx.moveTo(0, CH * 0.64); ctx.lineTo(CW, CH * 0.64); ctx.stroke();
+}
+
+function drawDims(ctx, boxes, P) {
+  ctx.fillStyle = '#2b2f38'; ctx.font = '600 13px "Helvetica Neue", Arial'; ctx.textBaseline = 'top';
+  const byBody = {};
+  boxes.forEach(b => { (byBody[b.bi] = byBody[b.bi] || []).push(b); });
+  Object.values(byBody).forEach(arr => {
+    const first = arr[0], last = arr[arr.length - 1];
+    const w = arr.reduce((s, bb) => s + bb.w, 0);
+    const sF = { x: first.base.x + first.inward.x * first.d, y: first.base.y + first.inward.y * first.d };
+    const eF = { x: last.base.x + last.dir.x * last.w + last.inward.x * last.d, y: last.base.y + last.dir.y * last.w + last.inward.y * last.d };
+    const p = P((sF.x + eF.x) / 2, (sF.y + eF.y) / 2, 0);
+    ctx.textAlign = 'center'; ctx.fillText(`${w} ${CM}`, p.x, p.y + 10);
+  });
+  const b0 = boxes[0];
+  const pL = P(b0.base.x + b0.inward.x * b0.d, b0.base.y + b0.inward.y * b0.d, b0.h * 0.5);
+  ctx.textAlign = 'right'; ctx.fillText(`${b0.h} ${CM}`, pL.x - 8, pL.y - 7);
+}
+
+function renderPreview() {
+  const canvas = document.getElementById('previewCanvas');
+  const ctx = canvas.getContext('2d');
+  const CW = 1040, CH = 660, dpr = window.devicePixelRatio || 1;
+  canvas.width = CW * dpr; canvas.height = CH * dpr;
+  canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, CW, CH);
+  drawRoom(ctx, CW, CH);
+
+  const boxes = buildScene();
+  if (!boxes.length) {
+    ctx.fillStyle = '#6b7280'; ctx.font = '16px "Helvetica Neue", Arial';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('אין מה להציג עדיין — הוסיפו עמודות לארון', CW / 2, CH / 2);
+    return;
+  }
+
+  // woman foot, in front of the first body
+  const b0 = boxes[0], runW0 = totalRunWidth(state.bodies[0]) || b0.w, d0 = bodyDepth(state.bodies[0]);
+  const womanH = 160;
+  const womanFoot = {
+    x: b0.base.x + b0.dir.x * runW0 * 0.45 + b0.inward.x * (d0 + 62),
+    y: b0.base.y + b0.dir.y * runW0 * 0.45 + b0.inward.y * (d0 + 62)
+  };
+
+  // fit scale from unscaled projected bounds (closet corners + woman)
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  const acc = (px, py) => { if (px < minX) minX = px; if (px > maxX) maxX = px; if (py < minY) minY = py; if (py > maxY) maxY = py; };
+  boxes.forEach(b => {
+    const s = b.base, ex = { x: b.dir.x * b.w, y: b.dir.y * b.w }, ey = { x: b.inward.x * b.d, y: b.inward.y * b.d };
+    [[s.x, s.y], [s.x + ex.x, s.y + ex.y], [s.x + ex.x + ey.x, s.y + ex.y + ey.y], [s.x + ey.x, s.y + ey.y]]
+      .forEach(([x, y]) => { [0, b.h].forEach(z => { const p = isoProject(x, y, z); acc(p.x, p.y); }); });
+  });
+  const wf = isoProject(womanFoot.x, womanFoot.y, 0);
+  acc(wf.x - 35, wf.y); acc(wf.x + 35, wf.y - womanH);
+
+  const pad = 70;
+  const scale = Math.min((CW - pad * 2) / (maxX - minX), (CH - pad * 2) / (maxY - minY));
+  const offX = pad - minX * scale + ((CW - pad * 2) - (maxX - minX) * scale) / 2;
+  const offY = pad - minY * scale + ((CH - pad * 2) - (maxY - minY) * scale) / 2;
+  const P = (x, y, z) => { const p = isoProject(x, y, z); return { x: offX + p.x * scale, y: offY + p.y * scale }; };
+
+  // painter's order: back (smaller base x+y) first
+  boxes.slice().sort((a, b) => (a.base.x + a.base.y) - (b.base.x + b.base.y)).forEach(b => drawBox(ctx, b, P));
+
+  drawWoman(ctx, P(womanFoot.x, womanFoot.y, 0), womanH * scale);
+  drawDims(ctx, boxes, P);
+}
+
+function openPreview() {
+  document.getElementById('previewModal').classList.add('open');
+  requestAnimationFrame(renderPreview);
+}
+function closePreview() { document.getElementById('previewModal').classList.remove('open'); }
+function savePreview() {
+  const canvas = document.getElementById('previewCanvas');
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = `combo-preview-${new Date().toISOString().slice(0, 10)}.png`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+
+document.getElementById('btnPreview').addEventListener('click', openPreview);
+document.getElementById('previewClose').addEventListener('click', closePreview);
+document.getElementById('previewSave').addEventListener('click', savePreview);
+document.getElementById('previewModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('previewModal')) closePreview();
+});
 
 // ── Resize ─────────────────────────────────────────────────────────────
 let _resizeTimer;
