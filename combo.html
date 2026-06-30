@@ -368,10 +368,12 @@
     padding: 16px; display: flex; align-items: center; justify-content: center;
     background: var(--surface); overflow: auto;
   }
-  #previewCanvas {
-    max-width: 100%; height: auto; border-radius: 6px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.12); background: #fff;
+  #previewStage {
+    width: 1040px; max-width: 100%; height: 660px; max-height: 74vh;
+    border-radius: 6px; overflow: hidden; background: #eef1f4;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.12);
   }
+  #previewStage canvas { display: block; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
@@ -439,10 +441,14 @@
       </div>
     </div>
     <div class="preview-canvas-wrap">
-      <canvas id="previewCanvas"></canvas>
+      <div id="previewStage"></div>
     </div>
   </div>
 </div>
+
+<!-- three.js (UMD global build) for the 3D preview -->
+<script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
 <script>
 // ── Escape helper (prevents XSS in innerHTML templates) ────────────────
@@ -1338,211 +1344,209 @@ function renderWallPanel() {
   panel.appendChild(edit);
 }
 
-// ── 3D Preview (isometric, single-file, canvas) ────────────────────────
-const ISO_COS = Math.cos(Math.PI / 6), ISO_SIN = Math.sin(Math.PI / 6);
-function isoProject(x, y, z) { return { x: (x - y) * ISO_COS, y: (x + y) * ISO_SIN - z }; }
-function totalRunWidth(body) { return body.columns.reduce((s, c) => s + (Number(c.width) || 0), 0); }
-let previewRoomImg = null; // swapped for the customer's room image when provided
+// ── 3D Preview (three.js) ──────────────────────────────────────────────
+let _three = null;          // { renderer, scene, camera, controls, closet, floor, woman }
+let _previewRAF = 0;
+let previewRoomImg = null;  // optional customer room image, wired in later
 
-// Lay all columns out as connected runs that turn 90° at each body join.
-function buildScene() {
-  const boxes = [];
-  let cursor = { x: 0, y: 0 };     // back-start corner of the current run
-  let dir = { x: 1, y: 0 };        // run direction
-  let inward = { x: 0, y: 1 };     // depth / front direction
+function rot90(v) { return { x: -v.z, z: v.x }; } // 90° CCW in the ground (x,z) plane
+
+// Lay columns out as connected runs that turn 90° at each body join. Each body
+// after the first starts offset by the previous body's depth, so the previous
+// body physically fills the corner (this is the wall-length deduction in 3D).
+function buildLayout() {
+  const items = [];
+  let cursor = { x: 0, z: 0 }, dir = { x: 1, z: 0 }, inward = { x: 0, z: 1 };
   state.bodies.forEach((body, bi) => {
     let off = 0;
     body.columns.forEach(col => {
-      boxes.push({
-        base: { x: cursor.x + dir.x * off, y: cursor.y + dir.y * off },
-        dir: { ...dir }, inward: { ...inward },
-        w: Number(col.width) || 0, d: colDepth(col), h: Number(col.totalHeight) || 0, col, bi
+      const w = Number(col.width) || 0, d = colDepth(col), h = Number(col.totalHeight) || 0;
+      items.push({
+        col, w, d, h, bi,
+        cx: cursor.x + dir.x * (off + w / 2) + inward.x * (d / 2),
+        cz: cursor.z + dir.z * (off + w / 2) + inward.z * (d / 2),
+        angle: Math.atan2(-dir.z, dir.x)   // box's +Z (front) faces `inward`
       });
-      off += Number(col.width) || 0;
+      off += w;
     });
-    // Turn for next body: swap dir/inward (keeps both fronts camera-facing),
-    // and offset the next run by this body's depth so they meet at the corner.
-    const dpt = bodyDepth(body), runLen = totalRunWidth(body);
-    const runEnd = { x: cursor.x + dir.x * runLen, y: cursor.y + dir.y * runLen };
-    const ndir = { ...inward }, ninward = { ...dir };
-    cursor = { x: runEnd.x + ndir.x * dpt, y: runEnd.y + ndir.y * dpt };
+    const dpt = bodyDepth(body);
+    const runLen = body.columns.reduce((s, c) => s + (Number(c.width) || 0), 0);
+    const runEnd = { x: cursor.x + dir.x * runLen, z: cursor.z + dir.z * runLen };
+    const ndir = rot90(dir), ninward = rot90(inward);
+    cursor = { x: runEnd.x + ndir.x * dpt, z: runEnd.z + ndir.z * dpt };
     dir = ndir; inward = ninward;
   });
-  return boxes;
+  return items;
 }
 
-function poly(ctx, pts) {
-  ctx.beginPath();
-  pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-  ctx.closePath();
-}
-function frontPt(b, t, z, P) {
-  return P(b.base.x + b.inward.x * b.d + b.dir.x * b.w * t,
-           b.base.y + b.inward.y * b.d + b.dir.y * b.w * t, z);
-}
-
-function drawSectionBand(ctx, b, P, zLo, zHi, sec) {
+// Canvas texture of a column's front (its sections), mapped onto the +Z face.
+function colFrontTexture(col, w, h) {
+  const PX = 6;
+  const cw = Math.max(8, Math.round(w * PX)), ch = Math.max(8, Math.round(h * PX));
+  const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+  const ctx = c.getContext('2d');
   const colors = { open: '#ffffff', shelf: '#f0f0ec', hanging: '#eef3f8', drawer: '#faf5ee' };
-  const p1 = frontPt(b, 0, zLo, P), p2 = frontPt(b, 1, zLo, P), p3 = frontPt(b, 1, zHi, P), p4 = frontPt(b, 0, zHi, P);
-  ctx.fillStyle = colors[sec.type] || '#fff';
-  poly(ctx, [p1, p2, p3, p4]); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.10)'; ctx.lineWidth = 1; ctx.stroke();
-  const line = (z, c, lw) => {
-    const a = frontPt(b, 0.04, z, P), d = frontPt(b, 0.96, z, P);
-    ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(d.x, d.y); ctx.stroke();
-  };
-  if (sec.type === 'shelf') {
-    const n = Math.max(1, sec.shelfCount || 3);
-    for (let i = 1; i <= n; i++) line(zLo + (zHi - zLo) * (i / (n + 1)), 'rgba(0,0,0,0.20)', 1.3);
-  } else if (sec.type === 'drawer') {
-    const n = Math.max(1, sec.drawerCount || 2);
-    for (let i = 1; i < n; i++) line(zLo + (zHi - zLo) * (i / n), 'rgba(120,100,70,0.55)', 1.3);
-    ctx.fillStyle = 'rgba(120,100,70,0.6)';
-    for (let i = 0; i < n; i++) {
-      const m = frontPt(b, 0.5, zLo + (zHi - zLo) * ((i + 0.5) / n), P);
-      ctx.beginPath(); ctx.arc(m.x, m.y, 1.8, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cw, ch);
+  const hline = (yy, color, lw) => { ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(cw * 0.04, yy); ctx.lineTo(cw * 0.96, yy); ctx.stroke(); };
+  let y = 0;
+  (col.sections || []).forEach(sec => {
+    const sh = Math.round((Number(sec.height) || 0) * PX);
+    ctx.fillStyle = colors[sec.type] || '#fff'; ctx.fillRect(0, y, cw, sh);
+    ctx.strokeStyle = 'rgba(0,0,0,0.10)'; ctx.lineWidth = 1; ctx.strokeRect(0.5, y + 0.5, cw - 1, sh - 1);
+    if (sec.type === 'shelf') {
+      const n = Math.max(1, sec.shelfCount || 3);
+      for (let i = 1; i <= n; i++) hline(y + sh * (i / (n + 1)), 'rgba(0,0,0,0.18)', 2);
+    } else if (sec.type === 'drawer') {
+      const n = Math.max(1, sec.drawerCount || 2);
+      for (let i = 1; i < n; i++) hline(y + sh * (i / n), 'rgba(120,100,70,0.5)', 2);
+      ctx.fillStyle = 'rgba(120,100,70,0.6)';
+      for (let i = 0; i < n; i++) { ctx.beginPath(); ctx.arc(cw / 2, y + sh * ((i + 0.5) / n), 3, 0, Math.PI * 2); ctx.fill(); }
+      if (sec.glassFront) { ctx.fillStyle = 'rgba(150,190,225,0.28)'; ctx.fillRect(0, y, cw, sh); }
+    } else if (sec.type === 'hanging') {
+      hline(y + sh * 0.14, 'rgba(90,130,165,0.85)', 3);
     }
-    if (sec.glassFront) { ctx.fillStyle = 'rgba(150,190,225,0.30)'; poly(ctx, [p1, p2, p3, p4]); ctx.fill(); }
-  } else if (sec.type === 'hanging') {
-    line(zHi - (zHi - zLo) * 0.16, 'rgba(90,130,165,0.85)', 1.8);
-  }
-}
-
-function drawBox(ctx, b, P) {
-  const s = b.base, ex = { x: b.dir.x * b.w, y: b.dir.y * b.w }, ey = { x: b.inward.x * b.d, y: b.inward.y * b.d }, h = b.h;
-  const Wbs = s, Wbe = { x: s.x + ex.x, y: s.y + ex.y };
-  const Wfe = { x: s.x + ex.x + ey.x, y: s.y + ex.y + ey.y }, Wfs = { x: s.x + ey.x, y: s.y + ey.y };
-  const bs0 = P(Wbs.x, Wbs.y, 0), be0 = P(Wbe.x, Wbe.y, 0), fe0 = P(Wfe.x, Wfe.y, 0), fs0 = P(Wfs.x, Wfs.y, 0);
-  const bsh = P(Wbs.x, Wbs.y, h), beh = P(Wbe.x, Wbe.y, h), feh = P(Wfe.x, Wfe.y, h), fsh = P(Wfs.x, Wfs.y, h);
-
-  ctx.fillStyle = 'rgba(0,0,0,0.08)'; poly(ctx, [bs0, be0, fe0, fs0]); ctx.fill();      // floor shadow
-  ctx.lineWidth = 1; ctx.strokeStyle = '#aeb5bd';
-  ctx.fillStyle = '#e6e9ed'; poly(ctx, [bsh, beh, feh, fsh]); ctx.fill(); ctx.stroke(); // top
-  ctx.fillStyle = '#d2d7dd'; poly(ctx, [be0, fe0, feh, beh]); ctx.fill(); ctx.stroke(); // run-end side
-  ctx.fillStyle = '#fbfcfd'; poly(ctx, [fs0, fe0, feh, fsh]); ctx.fill(); ctx.stroke(); // front base
-
-  let zHi = h;
-  (b.col.sections || []).forEach(sec => {
-    const zLo = Math.max(0, zHi - (Number(sec.height) || 0));
-    drawSectionBand(ctx, b, P, zLo, zHi, sec);
-    zHi = zLo;
+    y += sh;
   });
-  ctx.strokeStyle = '#8d949c'; ctx.lineWidth = 1.2; poly(ctx, [fs0, fe0, feh, fsh]); ctx.stroke();
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  return tex;
 }
 
-function drawWoman(ctx, foot, H) {
-  const cx = foot.x, cy = foot.y;
-  ctx.save();
-  ctx.fillStyle = 'rgba(52,57,68,0.88)';
-  ctx.strokeStyle = 'rgba(52,57,68,0.88)';
-  ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.arc(cx, cy - 0.90 * H, 0.052 * H, 0, Math.PI * 2); ctx.fill();      // head
-  ctx.lineWidth = 0.03 * H; ctx.beginPath(); ctx.moveTo(cx, cy - 0.855 * H); ctx.lineTo(cx, cy - 0.82 * H); ctx.stroke(); // neck
-  poly(ctx, [                                                                               // A-line dress
-    { x: cx - 0.075 * H, y: cy - 0.82 * H }, { x: cx + 0.075 * H, y: cy - 0.82 * H },
-    { x: cx + 0.16 * H, y: cy - 0.40 * H }, { x: cx - 0.16 * H, y: cy - 0.40 * H }
-  ]); ctx.fill();
-  ctx.lineWidth = 0.028 * H;
-  ctx.beginPath(); ctx.moveTo(cx - 0.07 * H, cy - 0.80 * H); ctx.lineTo(cx - 0.145 * H, cy - 0.52 * H); ctx.stroke(); // arms
-  ctx.beginPath(); ctx.moveTo(cx + 0.07 * H, cy - 0.80 * H); ctx.lineTo(cx + 0.145 * H, cy - 0.52 * H); ctx.stroke();
-  ctx.lineWidth = 0.036 * H;
-  ctx.beginPath(); ctx.moveTo(cx - 0.05 * H, cy - 0.40 * H); ctx.lineTo(cx - 0.05 * H, cy); ctx.stroke();             // legs
-  ctx.beginPath(); ctx.moveTo(cx + 0.05 * H, cy - 0.40 * H); ctx.lineTo(cx + 0.05 * H, cy); ctx.stroke();
-  ctx.restore();
+// A camera-facing silhouette of a 160cm person for scale.
+function womanSprite() {
+  const W = 200, H = 560, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d'), cx = W / 2, cy = H, S = H;
+  ctx.fillStyle = 'rgba(52,57,68,0.92)'; ctx.strokeStyle = 'rgba(52,57,68,0.92)'; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(cx, cy - 0.90 * S, 0.052 * S, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 0.03 * S; ctx.beginPath(); ctx.moveTo(cx, cy - 0.855 * S); ctx.lineTo(cx, cy - 0.82 * S); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - 0.075 * S, cy - 0.82 * S); ctx.lineTo(cx + 0.075 * S, cy - 0.82 * S);
+  ctx.lineTo(cx + 0.16 * S, cy - 0.40 * S); ctx.lineTo(cx - 0.16 * S, cy - 0.40 * S); ctx.closePath(); ctx.fill();
+  ctx.lineWidth = 0.028 * S;
+  ctx.beginPath(); ctx.moveTo(cx - 0.07 * S, cy - 0.80 * S); ctx.lineTo(cx - 0.145 * S, cy - 0.52 * S); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx + 0.07 * S, cy - 0.80 * S); ctx.lineTo(cx + 0.145 * S, cy - 0.52 * S); ctx.stroke();
+  ctx.lineWidth = 0.036 * S;
+  ctx.beginPath(); ctx.moveTo(cx - 0.05 * S, cy - 0.40 * S); ctx.lineTo(cx - 0.05 * S, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx + 0.05 * S, cy - 0.40 * S); ctx.lineTo(cx + 0.05 * S, cy); ctx.stroke();
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  spr.center.set(0.5, 0);          // anchor at feet
+  spr.scale.set(55, 160, 1);       // cm
+  return spr;
 }
 
-function drawRoom(ctx, CW, CH) {
-  if (previewRoomImg) {
-    // cover-fit the customer's room image
-    const ir = previewRoomImg.width / previewRoomImg.height, cr = CW / CH;
-    let dw = CW, dh = CH, dx = 0, dy = 0;
-    if (ir > cr) { dh = CH; dw = CH * ir; dx = (CW - dw) / 2; } else { dw = CW; dh = CW / ir; dy = (CH - dh) / 2; }
-    ctx.drawImage(previewRoomImg, dx, dy, dw, dh);
-    return;
-  }
-  const g = ctx.createLinearGradient(0, 0, 0, CH);
-  g.addColorStop(0, '#eef1f4'); g.addColorStop(1, '#e4e8ec');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, CW, CH);
-  ctx.fillStyle = '#d9dde2'; ctx.fillRect(0, CH * 0.64, CW, CH * 0.36);
-  ctx.strokeStyle = 'rgba(0,0,0,0.06)'; ctx.beginPath(); ctx.moveTo(0, CH * 0.64); ctx.lineTo(CW, CH * 0.64); ctx.stroke();
-}
-
-function drawDims(ctx, boxes, P) {
-  ctx.fillStyle = '#2b2f38'; ctx.font = '600 13px "Helvetica Neue", Arial'; ctx.textBaseline = 'top';
-  const byBody = {};
-  boxes.forEach(b => { (byBody[b.bi] = byBody[b.bi] || []).push(b); });
-  Object.values(byBody).forEach(arr => {
-    const first = arr[0], last = arr[arr.length - 1];
-    const w = arr.reduce((s, bb) => s + bb.w, 0);
-    const sF = { x: first.base.x + first.inward.x * first.d, y: first.base.y + first.inward.y * first.d };
-    const eF = { x: last.base.x + last.dir.x * last.w + last.inward.x * last.d, y: last.base.y + last.dir.y * last.w + last.inward.y * last.d };
-    const p = P((sF.x + eF.x) / 2, (sF.y + eF.y) / 2, 0);
-    ctx.textAlign = 'center'; ctx.fillText(`${w} ${CM}`, p.x, p.y + 10);
+// Build the closet as a group of textured boxes laid out in true L / U / line.
+function buildCloset() {
+  const group = new THREE.Group();
+  const panelMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, roughness: 0.85 });
+  const topMat = new THREE.MeshStandardMaterial({ color: 0xe9ecef, roughness: 0.85 });
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0x8d949c });
+  buildLayout().forEach(it => {
+    const frontMat = new THREE.MeshStandardMaterial({ map: colFrontTexture(it.col, it.w, it.h), roughness: 0.8 });
+    const geo = new THREE.BoxGeometry(it.w, it.h, it.d);
+    // faces: [+X, -X, +Y, -Y, +Z(front), -Z]
+    const mesh = new THREE.Mesh(geo, [panelMat, panelMat, topMat, panelMat, frontMat, panelMat]);
+    mesh.position.set(it.cx, it.h / 2, it.cz);
+    mesh.rotation.y = it.angle;
+    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat));
+    group.add(mesh);
   });
-  const b0 = boxes[0];
-  const pL = P(b0.base.x + b0.inward.x * b0.d, b0.base.y + b0.inward.y * b0.d, b0.h * 0.5);
-  ctx.textAlign = 'right'; ctx.fillText(`${b0.h} ${CM}`, pL.x - 8, pL.y - 7);
+  return group;
 }
 
-function renderPreview() {
-  const canvas = document.getElementById('previewCanvas');
-  const ctx = canvas.getContext('2d');
-  const CW = 1040, CH = 660, dpr = window.devicePixelRatio || 1;
-  canvas.width = CW * dpr; canvas.height = CH * dpr;
-  canvas.style.width = CW + 'px'; canvas.style.height = CH + 'px';
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, CW, CH);
-  drawRoom(ctx, CW, CH);
+function initThree() {
+  const stage = document.getElementById('previewStage');
+  const W = stage.clientWidth || 1040, H = stage.clientHeight || 660;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(W, H);
+  stage.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xeef1f4);
+  const camera = new THREE.PerspectiveCamera(40, W / H, 1, 200000);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+  scene.add(new THREE.AmbientLight(0xffffff, 0.78));
+  const key = new THREE.DirectionalLight(0xffffff, 0.7); key.position.set(300, 700, 500); scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.28); fill.position.set(-400, 300, -200); scene.add(fill);
+  _three = { renderer, scene, camera, controls, closet: null, floor: null, woman: null };
+}
 
-  const boxes = buildScene();
-  if (!boxes.length) {
-    ctx.fillStyle = '#6b7280'; ctx.font = '16px "Helvetica Neue", Arial';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('אין מה להציג עדיין — הוסיפו עמודות לארון', CW / 2, CH / 2);
-    return;
-  }
+function rebuildScene() {
+  const t = _three;
+  ['closet', 'woman', 'floor'].forEach(k => { if (t[k]) { t.scene.remove(t[k]); t[k] = null; } });
 
-  // woman foot, in front of the first body
-  const b0 = boxes[0], runW0 = totalRunWidth(state.bodies[0]) || b0.w, d0 = bodyDepth(state.bodies[0]);
-  const womanH = 160;
-  const womanFoot = {
-    x: b0.base.x + b0.dir.x * runW0 * 0.45 + b0.inward.x * (d0 + 62),
-    y: b0.base.y + b0.dir.y * runW0 * 0.45 + b0.inward.y * (d0 + 62)
-  };
+  const items = buildLayout();
+  if (!items.length) return;
 
-  // fit scale from unscaled projected bounds (closet corners + woman)
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  const acc = (px, py) => { if (px < minX) minX = px; if (px > maxX) maxX = px; if (py < minY) minY = py; if (py > maxY) maxY = py; };
-  boxes.forEach(b => {
-    const s = b.base, ex = { x: b.dir.x * b.w, y: b.dir.y * b.w }, ey = { x: b.inward.x * b.d, y: b.inward.y * b.d };
-    [[s.x, s.y], [s.x + ex.x, s.y + ex.y], [s.x + ex.x + ey.x, s.y + ex.y + ey.y], [s.x + ey.x, s.y + ey.y]]
-      .forEach(([x, y]) => { [0, b.h].forEach(z => { const p = isoProject(x, y, z); acc(p.x, p.y); }); });
-  });
-  const wf = isoProject(womanFoot.x, womanFoot.y, 0);
-  acc(wf.x - 35, wf.y); acc(wf.x + 35, wf.y - womanH);
+  t.closet = buildCloset(); t.scene.add(t.closet);
 
-  const pad = 70;
-  const scale = Math.min((CW - pad * 2) / (maxX - minX), (CH - pad * 2) / (maxY - minY));
-  const offX = pad - minX * scale + ((CW - pad * 2) - (maxX - minX) * scale) / 2;
-  const offY = pad - minY * scale + ((CH - pad * 2) - (maxY - minY) * scale) / 2;
-  const P = (x, y, z) => { const p = isoProject(x, y, z); return { x: offX + p.x * scale, y: offY + p.y * scale }; };
+  const cbox = new THREE.Box3().setFromObject(t.closet);
+  const center0 = cbox.getCenter(new THREE.Vector3());
+  const maxDim = cbox.getSize(new THREE.Vector3()).length();
 
-  // painter's order: back (smaller base x+y) first
-  boxes.slice().sort((a, b) => (a.base.x + a.base.y) - (b.base.x + b.base.y)).forEach(b => drawBox(ctx, b, P));
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(maxDim * 8, maxDim * 8),
+    new THREE.MeshStandardMaterial({ color: 0xd9dde2, roughness: 1 })
+  );
+  floor.rotation.x = -Math.PI / 2; floor.position.set(center0.x, 0, center0.z);
+  t.floor = floor; t.scene.add(floor);
 
-  drawWoman(ctx, P(womanFoot.x, womanFoot.y, 0), womanH * scale);
-  drawDims(ctx, boxes, P);
+  // Stand her just left of the whole closet, at the front, so she's always visible.
+  const womanX = cbox.min.x - 45, womanZ = cbox.max.z;
+  t.woman = womanSprite();
+  t.woman.position.set(womanX, 0, womanZ);
+  t.scene.add(t.woman);
+
+  // Fit camera to the whole scene (closet + woman), 3/4 angle from front-left-above.
+  const box = cbox.clone();
+  box.expandByPoint(new THREE.Vector3(womanX - 30, 0, womanZ));
+  box.expandByPoint(new THREE.Vector3(womanX + 30, 160, womanZ));
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const fov = t.camera.fov * Math.PI / 180;
+  const dist = (sphere.radius / Math.sin(fov / 2)) * 1.12;
+  const viewDir = new THREE.Vector3(-0.45, 0.5, 1).normalize();
+  t.controls.target.copy(sphere.center);
+  t.camera.position.copy(sphere.center.clone().add(viewDir.multiplyScalar(dist)));
+  t.camera.near = Math.max(1, dist - sphere.radius * 2);
+  t.camera.far = dist + sphere.radius * 4;
+  t.camera.updateProjectionMatrix();
+  t.controls.update();
+}
+
+function previewLoop() {
+  if (!_three) return;
+  _previewRAF = requestAnimationFrame(previewLoop);
+  _three.controls.update();
+  _three.renderer.render(_three.scene, _three.camera);
 }
 
 function openPreview() {
   document.getElementById('previewModal').classList.add('open');
-  requestAnimationFrame(renderPreview);
+  const stage = document.getElementById('previewStage');
+  if (typeof THREE === 'undefined') {
+    stage.textContent = 'התצוגה התלת-ממדית דורשת חיבור לאינטרנט (טעינת ספריית three.js).';
+    stage.style.display = 'flex'; stage.style.alignItems = 'center'; stage.style.justifyContent = 'center';
+    stage.style.color = '#6b7280'; stage.style.textAlign = 'center'; stage.style.padding = '20px';
+    return;
+  }
+  requestAnimationFrame(() => {
+    if (!_three) initThree();
+    _three.renderer.setSize(stage.clientWidth, stage.clientHeight);
+    _three.camera.aspect = stage.clientWidth / stage.clientHeight;
+    _three.camera.updateProjectionMatrix();
+    rebuildScene();
+    if (!_previewRAF) previewLoop();
+  });
 }
-function closePreview() { document.getElementById('previewModal').classList.remove('open'); }
+function closePreview() {
+  document.getElementById('previewModal').classList.remove('open');
+  if (_previewRAF) { cancelAnimationFrame(_previewRAF); _previewRAF = 0; }
+}
 function savePreview() {
-  const canvas = document.getElementById('previewCanvas');
+  if (!_three) return;
+  _three.renderer.render(_three.scene, _three.camera);
   const a = document.createElement('a');
-  a.href = canvas.toDataURL('image/png');
+  a.href = _three.renderer.domElement.toDataURL('image/png');
   a.download = `combo-preview-${new Date().toISOString().slice(0, 10)}.png`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
