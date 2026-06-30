@@ -275,6 +275,81 @@
     font-family: var(--font); color: var(--text); cursor: pointer; width: 64px; flex-shrink: 0;
   }
   .type-sel:focus { outline: none; }
+
+  /* ── Wall panel (left) ── */
+  #wallPanel {
+    width: 224px; flex-shrink: 0; order: 1;
+    border-inline-start: 1px solid var(--surface2);
+    background: var(--bg); padding: 16px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .wall-panel-head { font-size: 13px; font-weight: 600; color: var(--text); }
+  .wall-panel-empty { font-size: 12px; color: var(--text2); }
+  .wall-panel-svg {
+    display: flex; justify-content: center; padding: 12px 8px;
+    background: var(--surface); border-radius: 6px;
+  }
+  .wall-top { display: block; }
+  .wall-panel-type { font-size: 13px; font-weight: 600; text-align: center; }
+  .wall-panel-list { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
+  .wall-info-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--text2); }
+  .wall-info-val { color: var(--text); font-weight: 600; direction: ltr; }
+
+  /* ── Elevation bodies ── */
+  #elevation { gap: 36px; }
+  .elev-body { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .elev-body-cols { display: flex; align-items: flex-end; }
+  .elev-body-empty {
+    width: 90px; height: 130px; border: 2px dashed var(--brand); border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--brand-dark); font-size: 11px;
+  }
+  .elev-body-cap { font-size: 11px; color: var(--text2); text-align: center; white-space: nowrap; }
+  .elev-body-name { font-weight: 600; color: var(--text); }
+  .body-rem.ok { color: var(--ok); }
+  .body-rem.over { color: var(--danger); font-weight: 600; }
+
+  /* ── Edit panel body groups ── */
+  .body-group {
+    display: flex; flex-direction: column; gap: 8px;
+    padding-bottom: 12px; border-bottom: 1px solid var(--surface2);
+  }
+  .body-group:last-child { border-bottom: none; padding-bottom: 0; }
+  .body-group-head { display: flex; align-items: baseline; justify-content: space-between; }
+  .body-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .body-len { font-size: 11px; color: var(--text2); direction: ltr; }
+  .body-group > .body-rem { font-size: 11px; margin-top: -4px; }
+  .col-warn { font-size: 10px; color: var(--danger); padding: 0 8px 5px; }
+  .panel-hint { font-size: 13px; color: var(--text2); line-height: 1.6; }
+
+  /* ── Wall modal ── */
+  .modal-wall { max-width: 460px; }
+  .wall-types { display: flex; gap: 8px; margin-bottom: 14px; }
+  .wall-type-card {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 10px 6px; border: 1px solid var(--surface2); border-radius: 6px;
+    background: var(--bg); cursor: pointer; font-family: var(--font); transition: all 0.15s;
+  }
+  .wall-type-card:hover { border-color: var(--brand-dark); }
+  .wall-type-card.selected { border-color: var(--text); background: var(--surface); }
+  .wall-type-name { font-size: 12px; color: var(--text); }
+  .wall-orient { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .toggle-btn {
+    padding: 5px 14px; border: 1px solid var(--surface2); border-radius: var(--radius);
+    background: var(--bg); cursor: pointer; font-size: 12px; font-family: var(--font); color: var(--text2);
+    transition: all 0.12s;
+  }
+  .toggle-btn:hover { border-color: var(--brand-dark); }
+  .toggle-btn.selected { border-color: var(--text); color: var(--text); background: var(--surface); }
+  .wall-fields { display: flex; flex-direction: column; gap: 10px; margin-bottom: 22px; }
+  .wall-field { display: flex; align-items: center; gap: 8px; }
+  .wall-field-label { font-size: 12px; color: var(--text2); width: 96px; }
+  .wall-field .dim-input { width: 84px; text-align: center; }
+
+  .col-card-dims {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px; border-bottom: 1px solid var(--surface2);
+  }
 </style>
 </head>
 <body>
@@ -303,6 +378,7 @@
 <div class="main">
   <div id="elevationWrap"><div id="elevation"></div></div>
   <div id="editPanel"></div>
+  <div id="wallPanel"></div>
 </div>
 
 <input type="file" id="importFile" accept=".json" style="display:none">
@@ -314,6 +390,18 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" id="modalCancel">ביטול</button>
       <button class="btn btn-danger" id="modalConfirm">המשך</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="wallModal">
+  <div class="modal modal-wall">
+    <h2 id="wallModalTitle">הגדרת הקיר</h2>
+    <div class="wall-types" id="wallTypes"></div>
+    <div class="wall-fields" id="wallFields"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="wallCancel">ביטול</button>
+      <button class="btn btn-primary" id="wallConfirm">אישור</button>
     </div>
   </div>
 </div>
@@ -333,14 +421,35 @@ function esc(s) {
 const CM = 'ס"מ';
 const TYPE_NAMES = { open: 'פתוח', shelf: 'מדף', hanging: 'תלייה', drawer: 'מגירה' };
 const TYPE_ORDER = ['open', 'shelf', 'hanging', 'drawer'];
+const WALL_SEGS = { straight: 1, corner: 2, ushape: 3 };
+const WALL_NAMES = { straight: 'קיר ישר', corner: 'קיר פינתי', ushape: 'קיר בצורת U' };
+function segLabels(type) {
+  if (type === 'straight') return ['אורך הקיר'];
+  if (type === 'corner') return ['קיר 1', 'קיר 2'];
+  return ['קיר 1', 'קיר 2', 'קיר 3'];
+}
 
 // ── State ──────────────────────────────────────────────────────────────
-let state = { name: '', columns: [] };
+// Project { name, wall:{type,orientation,height,segments[]}, bodies:[ {id,columns:[]} ] }
+// Each body (גוף) maps to one wall segment; columns live inside bodies.
+function newProject() { return { name: '', wall: null, bodies: [] }; }
+
+let state = newProject();
 let selectedColId = null;
 let _saveTimer = null;
 let _importPending = null;
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function hasWall() { return !!(state.wall && Array.isArray(state.bodies) && state.bodies.length); }
+function wallHeight() { return Number(state.wall && state.wall.height) || 0; }
+function segLen(bi) { return Number(state.wall && state.wall.segments[bi]) || 0; }
+function colDepth(col) { return Number(col.depth) || 60; }
+// A body's footprint depth at the corner = its deepest column (60 if empty).
+function bodyDepth(body) { return body && body.columns.length ? Math.max(...body.columns.map(colDepth)) : 60; }
+// At a corner, each body after the first loses the previous body's depth from
+// its usable wall length (the previous closet occupies the corner footprint).
+function usableLen(bi) { return segLen(bi) - (bi > 0 ? bodyDepth(state.bodies[bi - 1]) : 0); }
 
 // ── Persistence ────────────────────────────────────────────────────────
 function scheduleSave() {
@@ -350,22 +459,53 @@ function scheduleSave() {
   }, 300);
 }
 
+// Accept current format, or migrate the old { name, columns } shape.
+function migrate(parsed) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (parsed.wall && Array.isArray(parsed.bodies)) return parsed;
+  if (Array.isArray(parsed.columns)) {
+    const cols = parsed.columns;
+    const maxH = cols.reduce((m, c) => Math.max(m, Number(c.totalHeight) || 0), 0) || 240;
+    const sumW = cols.reduce((s, c) => s + (Number(c.width) || 0), 0) || 300;
+    return {
+      name: parsed.name || '',
+      wall: { type: 'straight', height: maxH, segments: [sumW] },
+      bodies: [{ id: uid(), columns: cols }]
+    };
+  }
+  return null;
+}
+
 function loadFromStorage() {
   try {
     const raw = localStorage.getItem('combo-project');
     if (!raw) return;
-    const parsed = JSON.parse(raw);
-    if (parsed && Array.isArray(parsed.columns)) {
-      state = parsed;
-      if (state.columns.length) selectedColId = state.columns[0].id;
-    }
+    const m = migrate(JSON.parse(raw));
+    if (m) { state = m; selectFirstColumn(); }
   } catch (e) { /* ignore corrupt data */ }
 }
 
+function selectFirstColumn() {
+  selectedColId = null;
+  for (const b of state.bodies) { if (b.columns.length) { selectedColId = b.columns[0].id; return; } }
+}
+
+// ── Locate helpers (columns live inside bodies) ────────────────────────
+function locateCol(colId) {
+  for (const b of state.bodies) {
+    const i = b.columns.findIndex(c => c.id === colId);
+    if (i >= 0) return { body: b, col: b.columns[i], i };
+  }
+  return null;
+}
+function findBody(bodyId) { return state.bodies.find(b => b.id === bodyId); }
+
 // ── Column helpers ─────────────────────────────────────────────────────
-function addColumn() {
-  const col = { id: uid(), width: 60, totalHeight: 220, sections: [] };
-  state.columns.push(col);
+function addColumn(bodyId) {
+  const body = findBody(bodyId);
+  if (!body) return;
+  const col = { id: uid(), width: 60, totalHeight: wallHeight() || 220, depth: 60, sections: [] };
+  body.columns.push(col);
   selectedColId = col.id;
   scheduleSave();
   render();
@@ -376,58 +516,69 @@ function addColumn() {
 }
 
 function deleteColumn(id) {
-  state.columns = state.columns.filter(c => c.id !== id);
-  if (selectedColId === id)
-    selectedColId = state.columns.length ? state.columns[0].id : null;
+  const loc = locateCol(id);
+  if (!loc) return;
+  loc.body.columns.splice(loc.i, 1);
+  if (selectedColId === id) selectFirstColumn();
   scheduleSave(); render();
 }
 
+// Reorder within the same body only (bodies/גוף can't be swapped).
 function moveColumn(id, dir) {
-  const i = state.columns.findIndex(c => c.id === id);
-  const j = i + dir;
-  if (j < 0 || j >= state.columns.length) return;
-  [state.columns[i], state.columns[j]] = [state.columns[j], state.columns[i]];
+  const loc = locateCol(id);
+  if (!loc) return;
+  const cols = loc.body.columns;
+  const j = loc.i + dir;
+  if (j < 0 || j >= cols.length) return;
+  [cols[loc.i], cols[j]] = [cols[j], cols[loc.i]];
   scheduleSave(); render();
 }
 
 function updateColumnProp(id, key, val) {
-  const col = state.columns.find(c => c.id === id);
-  if (!col) return;
-  col[key] = val;
+  const loc = locateCol(id);
+  if (!loc) return;
+  loc.col[key] = val;
   scheduleSave();
   renderElevation();
-  refreshRemIndicator(id);
+  refreshColInfo(id);
+  refreshBodyInfo(loc.body.id);
+  // A column's depth changes the corner deduction for the NEXT body.
+  if (key === 'depth') {
+    const bi = state.bodies.indexOf(loc.body);
+    if (bi >= 0 && bi + 1 < state.bodies.length) refreshBodyInfo(state.bodies[bi + 1].id);
+  }
 }
 
 // ── Section helpers ────────────────────────────────────────────────────
 function addSection(colId) {
-  const col = state.columns.find(c => c.id === colId);
-  if (!col) return;
-  col.sections.push({ id: uid(), type: 'open', height: 40 });
+  const loc = locateCol(colId);
+  if (!loc) return;
+  loc.col.sections.push({ id: uid(), type: 'open', height: 40 });
   scheduleSave(); renderElevation(); renderEditPanel();
 }
 
 function deleteSection(colId, secId) {
-  const col = state.columns.find(c => c.id === colId);
-  if (!col) return;
-  col.sections = col.sections.filter(s => s.id !== secId);
+  const loc = locateCol(colId);
+  if (!loc) return;
+  loc.col.sections = loc.col.sections.filter(s => s.id !== secId);
   scheduleSave(); renderElevation(); renderEditPanel();
 }
 
 function moveSection(colId, secId, dir) {
-  const col = state.columns.find(c => c.id === colId);
-  if (!col) return;
-  const i = col.sections.findIndex(s => s.id === secId);
+  const loc = locateCol(colId);
+  if (!loc) return;
+  const secs = loc.col.sections;
+  const i = secs.findIndex(s => s.id === secId);
   const j = i + dir;
-  if (j < 0 || j >= col.sections.length) return;
-  [col.sections[i], col.sections[j]] = [col.sections[j], col.sections[i]];
+  if (j < 0 || j >= secs.length) return;
+  [secs[i], secs[j]] = [secs[j], secs[i]];
   scheduleSave(); renderElevation(); renderEditPanel();
 }
 
 function updateSectionProp(colId, secId, key, val) {
-  const col = state.columns.find(c => c.id === colId);
-  if (!col) return;
-  const sec = col.sections.find(s => s.id === secId);
+  const loc = locateCol(colId);
+  if (!loc) return;
+  const sec = loc.col.sections.find(s => s.id === secId);
   if (!sec) return;
   sec[key] = val;
   if (key === 'type') {
@@ -437,306 +588,409 @@ function updateSectionProp(colId, secId, key, val) {
   }
   scheduleSave();
   renderElevation();
-  refreshRemIndicator(colId);
+  refreshColInfo(colId);
   if (key === 'type') renderEditPanel();
 }
 
-// ── Remaining height ───────────────────────────────────────────────────
+// ── Computations ───────────────────────────────────────────────────────
 function remaining(col) {
   const used = col.sections.reduce((s, sec) => s + (Number(sec.height) || 0), 0);
   return (Number(col.totalHeight) || 0) - used;
 }
+function bodyUsedWidth(body) {
+  return body.columns.reduce((s, c) => s + (Number(c.width) || 0), 0);
+}
+function bodyRemaining(body, bi) {
+  return usableLen(bi) - bodyUsedWidth(body);
+}
 
-function refreshRemIndicator(colId) {
-  const col = state.columns.find(c => c.id === colId);
-  if (!col) return;
+// In-place refresh of one column's height-remaining + height-vs-wall warning.
+function refreshColInfo(colId) {
+  const loc = locateCol(colId);
+  if (!loc) return;
+  const col = loc.col;
   const el = document.querySelector(`.rem-indicator[data-col="${colId}"]`);
-  if (!el) return;
-  const rem = remaining(col);
-  el.className = `rem-indicator ${rem >= 0 ? 'ok' : 'over'}`;
-  el.querySelector('.rem-val').textContent =
-    rem >= 0 ? `נותרו ${rem} ${CM}` : `חריגה של ${Math.abs(rem)} ${CM}`;
+  if (el) {
+    const rem = remaining(col);
+    el.className = `rem-indicator ${rem >= 0 ? 'ok' : 'over'}`;
+    el.querySelector('.rem-val').textContent =
+      rem >= 0 ? `נותרו ${rem} ${CM}` : `חריגה של ${Math.abs(rem)} ${CM}`;
+  }
+  const warn = document.querySelector(`.col-warn[data-col="${colId}"]`);
+  if (warn) {
+    const over = (Number(col.totalHeight) || 0) > wallHeight();
+    warn.style.display = over ? 'block' : 'none';
+    warn.textContent = over ? `גובה חורג מגובה הקיר (מקס׳ ${wallHeight()} ${CM})` : '';
+  }
+}
+
+// In-place refresh of a body's width-remaining indicator(s).
+function refreshBodyInfo(bodyId) {
+  const bi = state.bodies.findIndex(b => b.id === bodyId);
+  if (bi < 0) return;
+  const rem = bodyRemaining(state.bodies[bi], bi);
+  document.querySelectorAll(`.body-rem[data-body="${bodyId}"]`).forEach(el => {
+    el.className = `body-rem ${rem >= 0 ? 'ok' : 'over'}`;
+    el.textContent = rem >= 0 ? `נותרו ${rem} ${CM} בקיר` : `חריגה מהקיר: ${Math.abs(rem)} ${CM}`;
+  });
 }
 
 // ── Scale ──────────────────────────────────────────────────────────────
 function calcScale() {
-  if (!state.columns.length) return 2;
+  const cols = state.bodies.flatMap(b => b.columns);
+  if (!cols.length) return 2;
   const wrap = document.getElementById('elevationWrap');
-  const availW = wrap.clientWidth - 80;
-  const availH = wrap.clientHeight - 48;
-  const totalCm = state.columns.reduce((s, c) => s + (Number(c.width) || 0), 0) || 60;
-  const maxH = Math.max(...state.columns.map(c => Number(c.totalHeight) || 1));
+  const gapPx = 36 * Math.max(0, state.bodies.length - 1);
+  const availW = wrap.clientWidth - 80 - gapPx;
+  const availH = wrap.clientHeight - 70;
+  const totalCm = state.bodies.reduce((s, b) => s + Math.max(bodyUsedWidth(b), 1), 0) || 60;
+  const maxH = Math.max(wallHeight() || 1, ...cols.map(c => Number(c.totalHeight) || 1));
   const byW = Math.max(0.5, availW / totalCm);
   const byH = Math.max(0.5, availH / maxH);
   return Math.min(byW, byH, 4);
 }
 
 // ── Elevation rendering ────────────────────────────────────────────────
+function buildColPreview(col, scale) {
+  const w = Math.max(8, Math.round((Number(col.width) || 0) * scale));
+  const totalH = Math.max(8, Math.round((Number(col.totalHeight) || 0) * scale));
+  const rem = remaining(col);
+  const remPx = rem > 0 ? Math.round(rem * scale) : 0;
+  const overPx = rem < 0 ? Math.round(Math.abs(rem) * scale) : 0;
+
+  const colEl = document.createElement('div');
+  colEl.className = 'col-preview' + (col.id === selectedColId ? ' selected' : '');
+  colEl.dataset.id = col.id;
+  colEl.style.width = w + 'px';
+  colEl.style.height = totalH + 'px';
+  colEl.addEventListener('click', () => selectCol(col.id));
+
+  if (w >= 28) {
+    const lbl = document.createElement('div');
+    lbl.className = 'col-preview-label';
+    lbl.textContent = col.width + ' ' + CM;
+    colEl.appendChild(lbl);
+  }
+
+  col.sections.forEach(sec => {
+    const h = Math.max(4, Math.round((Number(sec.height) || 0) * scale));
+    const secEl = document.createElement('div');
+    const glassClass = (sec.type === 'drawer' && sec.glassFront) ? ' glass' : '';
+    secEl.className = `sec-preview sec-${sec.type}${glassClass}`;
+    secEl.style.height = h + 'px';
+    if (sec.type === 'shelf') secEl.style.setProperty('--n', String(sec.shelfCount || 3));
+    if (sec.type === 'drawer') secEl.style.setProperty('--n', String(sec.drawerCount || 2));
+
+    if (h >= 18) {
+      const lbl = document.createElement('span');
+      lbl.className = 'sec-preview-label';
+      const typeName = TYPE_NAMES[sec.type] || sec.type;
+      let extra = '';
+      if (sec.type === 'shelf') extra = ` ×${sec.shelfCount || 3}`;
+      if (sec.type === 'drawer') extra = ` ×${sec.drawerCount || 2}`;
+      lbl.textContent = typeName + extra + '\n' + sec.height + ' ' + CM;
+      secEl.appendChild(lbl);
+    }
+    colEl.appendChild(secEl);
+  });
+
+  if (remPx > 0) {
+    const bar = document.createElement('div');
+    bar.className = 'rem-bar';
+    bar.style.height = remPx + 'px';
+    colEl.appendChild(bar);
+  }
+  if (overPx > 0) {
+    const bar = document.createElement('div');
+    bar.className = 'rem-bar over';
+    bar.style.height = overPx + 'px';
+    colEl.appendChild(bar);
+  }
+  return colEl;
+}
+
 function renderElevation() {
   const root = document.getElementById('elevation');
+  root.textContent = '';
 
-  if (!state.columns.length) {
-    root.innerHTML = '';
+  if (!hasWall()) {
     const hint = document.createElement('div');
     hint.className = 'empty-hint';
-    hint.innerHTML = '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>';
     const p = document.createElement('p');
-    p.textContent = 'הוסיפו את העמודה הראשונה מהפאנל שמימין';
+    p.textContent = 'הגדירו קיר כדי להתחיל';
     hint.appendChild(p);
     root.appendChild(hint);
     return;
   }
 
   const scale = calcScale();
-  // Build fragment to avoid touching DOM per section
   const frag = document.createDocumentFragment();
 
-  state.columns.forEach(col => {
-    const w = Math.max(8, Math.round((Number(col.width) || 0) * scale));
-    const totalH = Math.max(8, Math.round((Number(col.totalHeight) || 0) * scale));
-    const rem = remaining(col);
-    const remPx = rem > 0 ? Math.round(rem * scale) : 0;
-    const overPx = rem < 0 ? Math.round(Math.abs(rem) * scale) : 0;
+  state.bodies.forEach((body, bi) => {
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'elev-body';
 
-    const colEl = document.createElement('div');
-    colEl.className = 'col-preview' + (col.id === selectedColId ? ' selected' : '');
-    colEl.dataset.id = col.id;
-    colEl.style.width = w + 'px';
-    colEl.style.height = totalH + 'px';
-    colEl.addEventListener('click', () => selectCol(col.id));
-
-    if (w >= 28) {
-      const lbl = document.createElement('div');
-      lbl.className = 'col-preview-label';
-      lbl.textContent = col.width + ' ' + CM;
-      colEl.appendChild(lbl);
+    const colsEl = document.createElement('div');
+    colsEl.className = 'elev-body-cols';
+    if (!body.columns.length) {
+      const ph = document.createElement('div');
+      ph.className = 'elev-body-empty';
+      ph.textContent = 'גוף ריק';
+      colsEl.appendChild(ph);
+    } else {
+      body.columns.forEach(col => colsEl.appendChild(buildColPreview(col, scale)));
     }
+    bodyEl.appendChild(colsEl);
 
-    col.sections.forEach(sec => {
-      const h = Math.max(4, Math.round((Number(sec.height) || 0) * scale));
-      const secEl = document.createElement('div');
-      const glassClass = (sec.type === 'drawer' && sec.glassFront) ? ' glass' : '';
-      secEl.className = `sec-preview sec-${sec.type}${glassClass}`;
-      secEl.style.height = h + 'px';
-      if (sec.type === 'shelf') secEl.style.setProperty('--n', String(sec.shelfCount || 3));
-      if (sec.type === 'drawer') secEl.style.setProperty('--n', String(sec.drawerCount || 2));
+    // caption: name · wall length · remaining
+    const cap = document.createElement('div');
+    cap.className = 'elev-body-cap';
+    const name = document.createElement('span');
+    name.className = 'elev-body-name';
+    name.textContent = `גוף ${bi + 1}`;
+    cap.appendChild(name);
+    cap.appendChild(document.createTextNode(`  ·  זמין ${usableLen(bi)} ${CM}  ·  `));
+    const rem = bodyRemaining(body, bi);
+    const remSpan = document.createElement('span');
+    remSpan.className = `body-rem ${rem >= 0 ? 'ok' : 'over'}`;
+    remSpan.dataset.body = body.id;
+    remSpan.textContent = rem >= 0 ? `נותרו ${rem} ${CM} בקיר` : `חריגה מהקיר: ${Math.abs(rem)} ${CM}`;
+    cap.appendChild(remSpan);
+    bodyEl.appendChild(cap);
 
-      if (h >= 18) {
-        const lbl = document.createElement('span');
-        lbl.className = 'sec-preview-label';
-        const typeName = TYPE_NAMES[sec.type] || sec.type;
-        let extra = '';
-        if (sec.type === 'shelf') extra = ` ×${sec.shelfCount || 3}`;
-        if (sec.type === 'drawer') extra = ` ×${sec.drawerCount || 2}`;
-        lbl.textContent = typeName + extra + '\n' + sec.height + ' ' + CM;
-        secEl.appendChild(lbl);
-      }
-      colEl.appendChild(secEl);
-    });
-
-    // remaining / over bar at bottom (unused space)
-    if (remPx > 0) {
-      const bar = document.createElement('div');
-      bar.className = 'rem-bar';
-      bar.style.height = remPx + 'px';
-      colEl.appendChild(bar);
-    }
-    if (overPx > 0) {
-      const bar = document.createElement('div');
-      bar.className = 'rem-bar over';
-      bar.style.height = overPx + 'px';
-      colEl.appendChild(bar);
-    }
-
-    frag.appendChild(colEl);
+    frag.appendChild(bodyEl);
   });
 
-  root.innerHTML = '';
   root.appendChild(frag);
 }
 
 // ── Edit panel rendering ───────────────────────────────────────────────
+function buildSectionRow(col, sec) {
+  const row = document.createElement('div');
+  row.className = 'section-row';
+
+  // ── Main line: type, height, actions ──
+  const main = document.createElement('div');
+  main.className = 'section-main';
+
+  const sel = document.createElement('select');
+  sel.className = 'type-sel';
+  TYPE_ORDER.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = TYPE_NAMES[t];
+    if (sec.type === t) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener('change', () => updateSectionProp(col.id, sec.id, 'type', sel.value));
+  main.appendChild(sel);
+
+  const hInput = document.createElement('input');
+  hInput.type = 'number'; hInput.className = 'dim-input';
+  hInput.value = String(sec.height); hInput.min = '1'; hInput.max = '999';
+  hInput.style.width = '42px';
+  hInput.addEventListener('input', () => {
+    updateSectionProp(col.id, sec.id, 'height', Math.max(1, Number(hInput.value) || 1));
+  });
+  main.appendChild(hInput);
+
+  const unit = document.createElement('span');
+  unit.className = 'dim-unit';
+  unit.textContent = CM;
+  main.appendChild(unit);
+
+  const sp2 = document.createElement('div'); sp2.className = 'spacer';
+  main.appendChild(sp2);
+  main.appendChild(makeIconBtn('↑', 'הזזה למעלה', false, () => moveSection(col.id, sec.id, -1)));
+  main.appendChild(makeIconBtn('↓', 'הזזה למטה', false, () => moveSection(col.id, sec.id, 1)));
+  main.appendChild(makeIconBtn('×', 'מחיקת מדור', true, () => deleteSection(col.id, sec.id)));
+
+  row.appendChild(main);
+
+  // ── Extras line (shelf / drawer only) ──
+  if (sec.type === 'shelf') {
+    const ex = document.createElement('div');
+    ex.className = 'sec-extras';
+    const lbl = document.createElement('span');
+    lbl.className = 'dim-label'; lbl.textContent = 'מדפים';
+    ex.appendChild(lbl);
+    const ni = document.createElement('input');
+    ni.type = 'number'; ni.className = 'dim-input';
+    ni.value = String(sec.shelfCount || 3); ni.min = '1'; ni.max = '12';
+    ni.addEventListener('input', () =>
+      updateSectionProp(col.id, sec.id, 'shelfCount', Math.max(1, Number(ni.value) || 1)));
+    ex.appendChild(ni);
+    row.appendChild(ex);
+  } else if (sec.type === 'drawer') {
+    const ex = document.createElement('div');
+    ex.className = 'sec-extras';
+    const lbl = document.createElement('span');
+    lbl.className = 'dim-label'; lbl.textContent = 'מגירות';
+    ex.appendChild(lbl);
+    const ni = document.createElement('input');
+    ni.type = 'number'; ni.className = 'dim-input';
+    ni.value = String(sec.drawerCount || 2); ni.min = '1'; ni.max = '12';
+    ni.addEventListener('input', () =>
+      updateSectionProp(col.id, sec.id, 'drawerCount', Math.max(1, Number(ni.value) || 1)));
+    ex.appendChild(ni);
+    const glassLabel = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = !!sec.glassFront;
+    cb.addEventListener('change', () =>
+      updateSectionProp(col.id, sec.id, 'glassFront', cb.checked));
+    glassLabel.appendChild(cb);
+    glassLabel.appendChild(document.createTextNode(' זכוכית'));
+    ex.appendChild(glassLabel);
+    row.appendChild(ex);
+  }
+
+  return row;
+}
+
+function buildColCard(col, ci) {
+  const rem = remaining(col);
+  const remOk = rem >= 0;
+
+  const card = document.createElement('div');
+  card.className = 'col-card' + (col.id === selectedColId ? ' selected' : '');
+  card.dataset.id = col.id;
+
+  // ── Card header ──
+  const head = document.createElement('div');
+  head.className = 'col-card-head';
+
+  const numEl = document.createElement('span');
+  numEl.className = 'col-num';
+  numEl.textContent = String(ci + 1);
+  head.appendChild(numEl);
+
+  head.appendChild(makeDimGroup('רוחב', col.width, v => {
+    updateColumnProp(col.id, 'width', Math.max(1, v || 1));
+    selectCol(col.id);
+  }));
+  head.appendChild(makeDimGroup('גובה', col.totalHeight, v => {
+    updateColumnProp(col.id, 'totalHeight', Math.max(1, v || 1));
+    selectCol(col.id);
+  }));
+
+  const sp = document.createElement('div');
+  sp.className = 'spacer';
+  head.appendChild(sp);
+
+  head.appendChild(makeIconBtn('→', 'הזזה ימינה', false, () => moveColumn(col.id, -1)));
+  head.appendChild(makeIconBtn('←', 'הזזה שמאלה', false, () => moveColumn(col.id, 1)));
+  head.appendChild(makeIconBtn('×', 'מחיקת עמודה', true, () => deleteColumn(col.id)));
+
+  card.appendChild(head);
+
+  // ── Depth row (column depth, used for corner footprint) ──
+  const dimsRow = document.createElement('div');
+  dimsRow.className = 'col-card-dims';
+  dimsRow.appendChild(makeDimGroup('עומק', colDepth(col), v => {
+    updateColumnProp(col.id, 'depth', Math.max(1, v || 1));
+    selectCol(col.id);
+  }));
+  card.appendChild(dimsRow);
+
+  // ── Card body (sections) ──
+  const body = document.createElement('div');
+  body.className = 'col-card-body';
+  body.addEventListener('click', () => selectCol(col.id));
+
+  col.sections.forEach(sec => body.appendChild(buildSectionRow(col, sec)));
+
+  const addSecBtn = document.createElement('button');
+  addSecBtn.className = 'add-section-btn';
+  addSecBtn.textContent = '+ הוספת מדור';
+  addSecBtn.addEventListener('click', e => { e.stopPropagation(); addSection(col.id); });
+  body.appendChild(addSecBtn);
+
+  card.appendChild(body);
+
+  // ── Height-vs-wall warning ──
+  const warn = document.createElement('div');
+  warn.className = 'col-warn';
+  warn.dataset.col = col.id;
+  const over = (Number(col.totalHeight) || 0) > wallHeight();
+  warn.style.display = over ? 'block' : 'none';
+  warn.textContent = over ? `גובה חורג מגובה הקיר (מקס׳ ${wallHeight()} ${CM})` : '';
+  card.appendChild(warn);
+
+  // ── Height-remaining indicator ──
+  const remEl = document.createElement('div');
+  remEl.className = `rem-indicator ${remOk ? 'ok' : 'over'}`;
+  remEl.dataset.col = col.id;
+  const remVal = document.createElement('span');
+  remVal.className = 'rem-val';
+  remVal.textContent = remOk ? `נותרו ${rem} ${CM}` : `חריגה של ${Math.abs(rem)} ${CM}`;
+  remEl.appendChild(remVal);
+  card.appendChild(remEl);
+
+  return card;
+}
+
 function renderEditPanel() {
   const panel = document.getElementById('editPanel');
-  if (!state.columns.length) {
-    panel.innerHTML = '';
+  panel.textContent = '';
+
+  if (!hasWall()) {
+    const hint = document.createElement('div');
+    hint.className = 'panel-hint';
+    hint.textContent = 'הגדירו את הקיר כדי להתחיל לתכנן.';
+    panel.appendChild(hint);
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary';
+    btn.textContent = 'הגדרת קיר';
+    btn.style.marginTop = '10px';
+    btn.addEventListener('click', () => openWallModal());
+    panel.appendChild(btn);
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+
+  state.bodies.forEach((body, bi) => {
+    const group = document.createElement('div');
+    group.className = 'body-group';
+
+    const gh = document.createElement('div');
+    gh.className = 'body-group-head';
+    const gtitle = document.createElement('span');
+    gtitle.className = 'body-title';
+    gtitle.textContent = `גוף ${bi + 1}`;
+    const glen = document.createElement('span');
+    glen.className = 'body-len';
+    glen.textContent = bi > 0
+      ? `זמין ${usableLen(bi)} / קיר ${segLen(bi)} ${CM}`
+      : `קיר ${segLen(bi)} ${CM}`;
+    gh.appendChild(gtitle); gh.appendChild(glen);
+    group.appendChild(gh);
+
+    const rem = bodyRemaining(body, bi);
+    const bRem = document.createElement('div');
+    bRem.className = `body-rem ${rem >= 0 ? 'ok' : 'over'}`;
+    bRem.dataset.body = body.id;
+    bRem.textContent = rem >= 0 ? `נותרו ${rem} ${CM} בקיר` : `חריגה מהקיר: ${Math.abs(rem)} ${CM}`;
+    group.appendChild(bRem);
+
+    body.columns.forEach((col, ci) => group.appendChild(buildColCard(col, ci)));
+
     const addCard = document.createElement('div');
     addCard.className = 'col-card-add';
     const plus = document.createElement('span');
     plus.className = 'plus'; plus.textContent = '+';
     const addLbl = document.createElement('span'); addLbl.textContent = 'הוספת עמודה';
     addCard.appendChild(plus); addCard.appendChild(addLbl);
-    addCard.addEventListener('click', addColumn);
-    panel.appendChild(addCard);
-    return;
-  }
+    addCard.addEventListener('click', () => addColumn(body.id));
+    group.appendChild(addCard);
 
-  // Build safely using DOM methods to avoid XSS concerns with user data
-  const frag = document.createDocumentFragment();
-
-  state.columns.forEach((col, ci) => {
-    const rem = remaining(col);
-    const remOk = rem >= 0;
-
-    const card = document.createElement('div');
-    card.className = 'col-card' + (col.id === selectedColId ? ' selected' : '');
-    card.dataset.id = col.id;
-
-    // ── Card header ──
-    const head = document.createElement('div');
-    head.className = 'col-card-head';
-
-    const numEl = document.createElement('span');
-    numEl.className = 'col-num';
-    numEl.textContent = String(ci + 1);
-    head.appendChild(numEl);
-
-    // Width group
-    head.appendChild(makeDimGroup('רוחב', col.width, v => {
-      updateColumnProp(col.id, 'width', Math.max(1, v || 1));
-      selectCol(col.id);
-    }));
-
-    // Height group
-    head.appendChild(makeDimGroup('גובה', col.totalHeight, v => {
-      updateColumnProp(col.id, 'totalHeight', Math.max(1, v || 1));
-      selectCol(col.id);
-    }));
-
-    const sp = document.createElement('div');
-    sp.className = 'spacer';
-    head.appendChild(sp);
-
-    head.appendChild(makeIconBtn('→', 'הזזה ימינה', false, () => moveColumn(col.id, -1)));
-    head.appendChild(makeIconBtn('←', 'הזזה שמאלה', false, () => moveColumn(col.id, 1)));
-    head.appendChild(makeIconBtn('×', 'מחיקת עמודה', true, () => deleteColumn(col.id)));
-
-    card.appendChild(head);
-
-    // ── Card body (sections) ──
-    const body = document.createElement('div');
-    body.className = 'col-card-body';
-    body.addEventListener('click', () => selectCol(col.id));
-
-    col.sections.forEach(sec => {
-      const row = document.createElement('div');
-      row.className = 'section-row';
-
-      // ── Main line: type, height, actions ──
-      const main = document.createElement('div');
-      main.className = 'section-main';
-
-      const sel = document.createElement('select');
-      sel.className = 'type-sel';
-      TYPE_ORDER.forEach(t => {
-        const opt = document.createElement('option');
-        opt.value = t;
-        opt.textContent = TYPE_NAMES[t];
-        if (sec.type === t) opt.selected = true;
-        sel.appendChild(opt);
-      });
-      sel.addEventListener('change', () => updateSectionProp(col.id, sec.id, 'type', sel.value));
-      main.appendChild(sel);
-
-      const hInput = document.createElement('input');
-      hInput.type = 'number'; hInput.className = 'dim-input';
-      hInput.value = String(sec.height); hInput.min = '1'; hInput.max = '999';
-      hInput.style.width = '42px';
-      hInput.addEventListener('input', () => {
-        updateSectionProp(col.id, sec.id, 'height', Math.max(1, Number(hInput.value) || 1));
-      });
-      main.appendChild(hInput);
-
-      const unit = document.createElement('span');
-      unit.className = 'dim-unit';
-      unit.textContent = CM;
-      main.appendChild(unit);
-
-      const sp2 = document.createElement('div'); sp2.className = 'spacer';
-      main.appendChild(sp2);
-      main.appendChild(makeIconBtn('↑', 'הזזה למעלה', false, () => moveSection(col.id, sec.id, -1)));
-      main.appendChild(makeIconBtn('↓', 'הזזה למטה', false, () => moveSection(col.id, sec.id, 1)));
-      main.appendChild(makeIconBtn('×', 'מחיקת מדור', true, () => deleteSection(col.id, sec.id)));
-
-      row.appendChild(main);
-
-      // ── Extras line (shelf / drawer only) ──
-      if (sec.type === 'shelf') {
-        const ex = document.createElement('div');
-        ex.className = 'sec-extras';
-        const lbl = document.createElement('span');
-        lbl.className = 'dim-label'; lbl.textContent = 'מדפים';
-        ex.appendChild(lbl);
-        const ni = document.createElement('input');
-        ni.type = 'number'; ni.className = 'dim-input';
-        ni.value = String(sec.shelfCount || 3); ni.min = '1'; ni.max = '12';
-        ni.addEventListener('input', () =>
-          updateSectionProp(col.id, sec.id, 'shelfCount', Math.max(1, Number(ni.value) || 1)));
-        ex.appendChild(ni);
-        row.appendChild(ex);
-      } else if (sec.type === 'drawer') {
-        const ex = document.createElement('div');
-        ex.className = 'sec-extras';
-        const lbl = document.createElement('span');
-        lbl.className = 'dim-label'; lbl.textContent = 'מגירות';
-        ex.appendChild(lbl);
-        const ni = document.createElement('input');
-        ni.type = 'number'; ni.className = 'dim-input';
-        ni.value = String(sec.drawerCount || 2); ni.min = '1'; ni.max = '12';
-        ni.addEventListener('input', () =>
-          updateSectionProp(col.id, sec.id, 'drawerCount', Math.max(1, Number(ni.value) || 1)));
-        ex.appendChild(ni);
-        const glassLabel = document.createElement('label');
-        const cb = document.createElement('input');
-        cb.type = 'checkbox'; cb.checked = !!sec.glassFront;
-        cb.addEventListener('change', () =>
-          updateSectionProp(col.id, sec.id, 'glassFront', cb.checked));
-        glassLabel.appendChild(cb);
-        glassLabel.appendChild(document.createTextNode(' זכוכית'));
-        ex.appendChild(glassLabel);
-        row.appendChild(ex);
-      }
-
-      body.appendChild(row);
-    });
-
-    const addSecBtn = document.createElement('button');
-    addSecBtn.className = 'add-section-btn';
-    addSecBtn.textContent = '+ הוספת מדור';
-    addSecBtn.addEventListener('click', e => { e.stopPropagation(); addSection(col.id); });
-    body.appendChild(addSecBtn);
-
-    card.appendChild(body);
-
-    // ── Remaining indicator ──
-    const remEl = document.createElement('div');
-    remEl.className = `rem-indicator ${remOk ? 'ok' : 'over'}`;
-    remEl.dataset.col = col.id;
-    const remVal = document.createElement('span');
-    remVal.className = 'rem-val';
-    remVal.textContent = remOk ? `נותרו ${rem} ${CM}` : `חריגה של ${Math.abs(rem)} ${CM}`;
-    remEl.appendChild(remVal);
-    card.appendChild(remEl);
-
-    frag.appendChild(card);
+    frag.appendChild(group);
   });
 
-  // Add column card
-  const addCard = document.createElement('div');
-  addCard.className = 'col-card-add';
-  const plus = document.createElement('span');
-  plus.className = 'plus'; plus.textContent = '+';
-  const addLbl = document.createElement('span'); addLbl.textContent = 'הוספת עמודה';
-  addCard.appendChild(plus); addCard.appendChild(addLbl);
-  addCard.addEventListener('click', addColumn);
-  frag.appendChild(addCard);
-
-  panel.innerHTML = '';
   panel.appendChild(frag);
 
-  // Scroll selected card into view
   const sel = panel.querySelector(`.col-card[data-id="${selectedColId}"]`);
-  if (sel) sel.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  if (sel) sel.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
 }
 
 // ── DOM helpers ────────────────────────────────────────────────────────
@@ -766,7 +1020,7 @@ function makeIconBtn(text, title, isDel, onClick) {
 }
 
 // ── Full render ────────────────────────────────────────────────────────
-function render() { renderElevation(); renderEditPanel(); }
+function render() { renderElevation(); renderEditPanel(); renderWallPanel(); }
 
 function selectCol(id) {
   if (selectedColId === id) return;
@@ -787,13 +1041,12 @@ document.getElementById('projectName').addEventListener('input', function () {
 
 // ── Export ─────────────────────────────────────────────────────────────
 document.getElementById('btnExport').addEventListener('click', () => {
-  const totalWidth = state.columns.reduce((s, c) => s + (Number(c.width) || 0), 0);
   const payload = {
     project: state.name || 'Untitled',
     exportedAt: new Date().toISOString(),
     units: 'cm',
-    totalWidth,
-    columns: state.columns
+    wall: state.wall,
+    bodies: state.bodies
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -820,14 +1073,16 @@ document.getElementById('importFile').addEventListener('change', function () {
   reader.onload = ev => {
     try {
       const data = JSON.parse(ev.target.result);
-      if (!data || !Array.isArray(data.columns)) throw new Error('bad format');
-      _importPending = data;
+      const migrated = migrate(data);
+      if (!migrated) throw new Error('bad format');
+      migrated.name = data.project || data.name || '';
+      _importPending = migrated;
       showModal(
         'ייבוא פרויקט',
         `לייבא את "${data.project || 'פרויקט'}"? העבודה הנוכחית תוחלף.`,
         () => {
-          state = { name: _importPending.project || '', columns: _importPending.columns };
-          selectedColId = state.columns.length ? state.columns[0].id : null;
+          state = _importPending;
+          selectFirstColumn();
           document.getElementById('projectName').value = state.name;
           _importPending = null;
           scheduleSave(); render();
@@ -846,11 +1101,12 @@ document.getElementById('btnNew').addEventListener('click', () => {
     'פרויקט חדש',
     'פעולה זו תמחק את הפרויקט הנוכחי. ייצאו אותו קודם אם תרצו לשמור עליו.',
     () => {
-      state = { name: '', columns: [] };
+      state = newProject();
       selectedColId = null;
       document.getElementById('projectName').value = '';
       localStorage.removeItem('combo-project');
       render();
+      openWallModal();
     }
   );
 });
@@ -880,6 +1136,170 @@ document.getElementById('modalConfirm').addEventListener('click', () => {
   if (cb) cb();
 });
 
+// ── Top-view SVG (built via DOM, no innerHTML) ─────────────────────────
+function wallTopSVG(type, orientation, w, h) {
+  const NS = 'http://www.w3.org/2000/svg';
+  w = w || 100; h = h || 60;
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'wall-top');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('width', String(w));
+  svg.setAttribute('height', String(h));
+  const x0 = 14, x1 = w - 14, yB = h - 14, yT = 14, ym = Math.round(h / 2);
+  let d;
+  if (type === 'straight') d = `M${x0},${ym} H${x1}`;
+  else if (type === 'corner') d = `M${x0},${yB} H${x1} V${yT}`;
+  else d = `M${x0},${yT} V${yB} H${x1} V${yT}`;
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', d);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#2b2118');
+  path.setAttribute('stroke-width', '7');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(path);
+  return svg;
+}
+
+// ── Wall modal ─────────────────────────────────────────────────────────
+let _wallDraft = null;
+let _wallEditing = false;
+
+function defaultWall() { return { type: 'straight', height: 240, segments: [300] }; }
+
+function syncSegments() {
+  const n = WALL_SEGS[_wallDraft.type];
+  const segs = _wallDraft.segments || [];
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(Number(segs[i]) > 0 ? Number(segs[i]) : 300);
+  _wallDraft.segments = out;
+  delete _wallDraft.depths;
+}
+
+function openWallModal() {
+  _wallEditing = hasWall();
+  _wallDraft = state.wall ? clone(state.wall) : defaultWall();
+  syncSegments();
+  document.getElementById('wallCancel').style.display = _wallEditing ? '' : 'none';
+  renderWallModal();
+  document.getElementById('wallModal').classList.add('open');
+}
+
+function wallField(label, value, onInput) {
+  const wrap = document.createElement('div');
+  wrap.className = 'wall-field';
+  const lbl = document.createElement('span');
+  lbl.className = 'wall-field-label'; lbl.textContent = label;
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.className = 'dim-input';
+  inp.value = String(value); inp.min = '1'; inp.max = '2000';
+  inp.addEventListener('input', () => onInput(Number(inp.value)));
+  const u = document.createElement('span');
+  u.className = 'dim-unit'; u.textContent = CM;
+  wrap.appendChild(lbl); wrap.appendChild(inp); wrap.appendChild(u);
+  return wrap;
+}
+
+function renderWallModal() {
+  // Type cards
+  const typesEl = document.getElementById('wallTypes');
+  typesEl.textContent = '';
+  ['straight', 'corner', 'ushape'].forEach(t => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'wall-type-card' + (_wallDraft.type === t ? ' selected' : '');
+    card.appendChild(wallTopSVG(t, _wallDraft.orientation, 84, 52));
+    const nm = document.createElement('span');
+    nm.className = 'wall-type-name'; nm.textContent = WALL_NAMES[t];
+    card.appendChild(nm);
+    card.addEventListener('click', () => { _wallDraft.type = t; syncSegments(); renderWallModal(); });
+    typesEl.appendChild(card);
+  });
+
+  // Height + per-segment (length + depth) fields
+  const fieldsEl = document.getElementById('wallFields');
+  fieldsEl.textContent = '';
+  fieldsEl.appendChild(wallField('גובה הקיר', _wallDraft.height, v => { _wallDraft.height = Math.max(1, v || 1); }));
+  const labels = segLabels(_wallDraft.type);
+  _wallDraft.segments.forEach((len, i) => {
+    fieldsEl.appendChild(wallField(labels[i], len, v => { _wallDraft.segments[i] = Math.max(1, v || 1); }));
+  });
+}
+
+function applyWall() {
+  state.wall = clone(_wallDraft);
+  const n = WALL_SEGS[state.wall.type];
+  if (!Array.isArray(state.bodies)) state.bodies = [];
+  while (state.bodies.length < n) state.bodies.push({ id: uid(), columns: [] });
+  if (state.bodies.length > n) state.bodies = state.bodies.slice(0, n);
+  selectFirstColumn();
+  scheduleSave();
+  render();
+}
+
+function closeWallModal() { document.getElementById('wallModal').classList.remove('open'); }
+
+document.getElementById('wallConfirm').addEventListener('click', () => { applyWall(); closeWallModal(); });
+document.getElementById('wallCancel').addEventListener('click', closeWallModal);
+document.getElementById('wallModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('wallModal') && _wallEditing) closeWallModal();
+});
+
+// ── Wall panel (left) ──────────────────────────────────────────────────
+function wallInfoRow(label, val) {
+  const r = document.createElement('div');
+  r.className = 'wall-info-row';
+  const l = document.createElement('span'); l.textContent = label;
+  const v = document.createElement('span'); v.className = 'wall-info-val'; v.textContent = val + ' ' + CM;
+  r.appendChild(l); r.appendChild(v);
+  return r;
+}
+
+function renderWallPanel() {
+  const panel = document.getElementById('wallPanel');
+  if (!panel) return;
+  panel.textContent = '';
+
+  const head = document.createElement('div');
+  head.className = 'wall-panel-head'; head.textContent = 'הקיר';
+  panel.appendChild(head);
+
+  if (!hasWall()) {
+    const p = document.createElement('p');
+    p.className = 'wall-panel-empty'; p.textContent = 'טרם הוגדר קיר.';
+    panel.appendChild(p);
+    const b = document.createElement('button');
+    b.className = 'btn btn-primary'; b.textContent = 'הגדרת קיר'; b.style.width = '100%';
+    b.addEventListener('click', () => openWallModal());
+    panel.appendChild(b);
+    return;
+  }
+
+  const w = state.wall;
+  const svgWrap = document.createElement('div');
+  svgWrap.className = 'wall-panel-svg';
+  svgWrap.appendChild(wallTopSVG(w.type, w.orientation, 150, 96));
+  panel.appendChild(svgWrap);
+
+  const typeName = document.createElement('div');
+  typeName.className = 'wall-panel-type';
+  typeName.textContent = WALL_NAMES[w.type];
+  panel.appendChild(typeName);
+
+  const list = document.createElement('div');
+  list.className = 'wall-panel-list';
+  list.appendChild(wallInfoRow('גובה', w.height));
+  const labels = segLabels(w.type);
+  w.segments.forEach((len, i) => list.appendChild(wallInfoRow(labels[i], len)));
+  panel.appendChild(list);
+
+  const edit = document.createElement('button');
+  edit.className = 'btn btn-ghost'; edit.textContent = 'עריכת הקיר';
+  edit.style.width = '100%'; edit.style.marginTop = '10px';
+  edit.addEventListener('click', () => openWallModal());
+  panel.appendChild(edit);
+}
+
 // ── Resize ─────────────────────────────────────────────────────────────
 let _resizeTimer;
 window.addEventListener('resize', () => {
@@ -891,6 +1311,7 @@ window.addEventListener('resize', () => {
 loadFromStorage();
 document.getElementById('projectName').value = state.name || '';
 render();
+if (!hasWall()) openWallModal();
 </script>
 </body>
 </html>
